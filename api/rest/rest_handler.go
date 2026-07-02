@@ -23,9 +23,9 @@ type reqOption func(*http.Request)
 
 // Handler defines the interface for making REST API requests.
 type Handler interface {
-	Get(ctx context.Context, endpoint string, resp any) error
+	Get(ctx context.Context, endpoint string, resp any, opts ...GetOption) error
 	GetStatusCode(ctx context.Context, endpoint string) (int, error)
-	GetSSZ(ctx context.Context, endpoint string) ([]byte, http.Header, error)
+	GetSSZ(ctx context.Context, endpoint string, opts ...GetOption) ([]byte, http.Header, error)
 	Post(ctx context.Context, endpoint string, headers map[string]string, data *bytes.Buffer, resp any) error
 	PostSSZ(ctx context.Context, endpoint string, headers map[string]string, data *bytes.Buffer) ([]byte, http.Header, error)
 	Host() string
@@ -79,8 +79,7 @@ func (c *handler) Host() string {
 }
 
 // Get sends a GET request and decodes the response body as a JSON object into the passed in object.
-// If an HTTP error is returned, the body is decoded as a DefaultJsonError JSON object and returned as the first return value.
-func (c *handler) Get(ctx context.Context, endpoint string, resp any) error {
+func (c *handler) Get(ctx context.Context, endpoint string, resp any, _ ...GetOption) error {
 	url := c.host + endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -98,6 +97,53 @@ func (c *handler) Get(ctx context.Context, endpoint string, resp any) error {
 	}()
 
 	return decodeResp(httpResp, resp)
+}
+
+func (c *handler) getRaw(ctx context.Context, endpoint string) (json.RawMessage, error) {
+	url := c.host + endpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create request for endpoint %s", url)
+	}
+
+	req.Header.Set("User-Agent", version.BuildData())
+	httpResp, err := c.client.Do(req)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to perform request for endpoint %s", url)
+	}
+
+	defer func() {
+		if err := httpResp.Body.Close(); err != nil {
+			return
+		}
+	}()
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to read response body for %s", httpResp.Request.URL)
+	}
+
+	if !strings.Contains(httpResp.Header.Get("Content-Type"), api.JsonMediaType) {
+		if !strings.HasPrefix(httpResp.Status, "2") {
+			return nil, &httputil.DefaultJsonError{Code: httpResp.StatusCode, Message: string(body)}
+		}
+		return nil, nil
+	}
+
+	// non-2XX codes are a failure.
+	if !strings.HasPrefix(httpResp.Status, "2") {
+		errorJson := &httputil.DefaultJsonError{}
+		if err := json.Unmarshal(body, errorJson); err != nil {
+			return nil, errors.Wrapf(err, "failed to decode response body into error json for %s", httpResp.Request.URL)
+		}
+		return nil, errorJson
+	}
+
+	if len(body) == 0 {
+		return nil, errors.Errorf("empty response body for %s", httpResp.Request.URL)
+	}
+
+	return json.RawMessage(body), nil
 }
 
 // GetStatusCode sends a GET request and returns only the HTTP status code.
@@ -122,7 +168,7 @@ func (c *handler) GetStatusCode(ctx context.Context, endpoint string) (int, erro
 	return httpResp.StatusCode, nil
 }
 
-func (c *handler) GetSSZ(ctx context.Context, endpoint string) ([]byte, http.Header, error) {
+func (c *handler) GetSSZ(ctx context.Context, endpoint string, _ ...GetOption) ([]byte, http.Header, error) {
 	url := c.host + endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -312,8 +358,4 @@ func decodeResp(httpResp *http.Response, resp any) error {
 	}
 
 	return nil
-}
-
-func (c *handler) SwitchHost(host string) {
-	c.host = host
 }

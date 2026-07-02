@@ -33,6 +33,8 @@ func (v *validator) SubmitPayloadAttestation(ctx context.Context, slot primitive
 
 	v.waitForPayloadAvailableOrDeadline(ctx, slot)
 
+	ctx = v.withPayloadHeadHint(ctx, slot)
+
 	data, err := v.validatorClient.PayloadAttestationData(ctx, slot)
 	if err != nil {
 		if status.Code(errors.Cause(err)) == codes.Unavailable {

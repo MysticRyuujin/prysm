@@ -101,6 +101,7 @@ type validator struct {
 	highestValidSlot             primitives.Slot
 	eventsChannel                chan *eventClient.Event
 	payloadAvailability          *payloadAvailability
+	head                         *headTracker
 	pubkeyToStatus               map[[fieldparams.BLSPubkeyLength]byte]*validatorStatus
 	signedValidatorRegistrations map[[fieldparams.BLSPubkeyLength]byte]*ethpb.SignedValidatorRegistrationV1
 	aggSelector                  aggregatorSelector
@@ -736,6 +737,8 @@ func (v *validator) getAttestationData(ctx context.Context, slot primitives.Slot
 	epoch := slots.ToEpoch(slot)
 	postElectra := epoch >= params.BeaconConfig().ElectraForkEpoch
 
+	ctx = v.withHeadHint(ctx, slot, attestationDueComponent(slot))
+
 	// Pre-Electra: committee index varies per validator.
 	// Post-Gloas: index signals payload status.
 	if !postElectra {
@@ -902,6 +905,9 @@ func (v *validator) ProcessEvent(ctx context.Context, event *eventClient.Event) 
 			return
 		}
 		v.setHighestSlot(primitives.Slot(uintSlot))
+		if err := v.recordHeadRoot(primitives.Slot(uintSlot), head.Block); err != nil {
+			log.WithError(err).Error("Failed to record head event block root")
+		}
 		if !v.disableDutiesPolling {
 			if err := v.checkDependentRoots(ctx, head); err != nil {
 				log.WithError(err).Error("Failed to check dependent roots")
@@ -918,7 +924,13 @@ func (v *validator) ProcessEvent(ctx context.Context, event *eventClient.Event) 
 			log.WithError(err).Error("Failed to parse execution payload event slot")
 			return
 		}
-		v.payloadAvailability.notify(primitives.Slot(uintSlot))
+		var root *[32]byte
+		if payloadRoot, err := bytesutil.DecodeHex32(payloadEvent.BlockRoot); err != nil {
+			log.WithError(err).Error("Failed to decode execution payload event block root")
+		} else {
+			root = &payloadRoot
+		}
+		v.payloadAvailability.notify(primitives.Slot(uintSlot), root)
 	default:
 		// just keep going and log the error
 		log.WithField("type", event.Type).WithField("data", string(event.Data)).Warn("Received an unknown event")

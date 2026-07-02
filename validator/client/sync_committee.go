@@ -29,6 +29,8 @@ func (v *validator) SubmitSyncCommitteeMessage(ctx context.Context, slot primiti
 
 	v.waitUntilAttestationDueOrValidBlock(ctx, slot)
 
+	ctx = v.withHeadHint(ctx, slot, attestationDueComponent(slot))
+
 	res, err := v.validatorClient.SyncMessageBlockRoot(ctx, &emptypb.Empty{})
 	if err != nil {
 		log.WithError(err).Error("Could not request sync message block root to sign")
@@ -131,6 +133,8 @@ func (v *validator) SubmitSignedContributionAndProof(ctx context.Context, slot p
 		component = cfg.ContributionDueBPSGloas
 	}
 	v.waitUntilSlotComponent(ctx, slot, component)
+
+	ctx = v.withHeadHint(ctx, slot, component)
 
 	coveredSubnets := make(map[uint64]bool)
 	for i, comIdx := range indexRes.Indices {

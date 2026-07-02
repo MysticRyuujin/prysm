@@ -12,10 +12,14 @@ import (
 type payloadAvailability struct {
 	mu    sync.Mutex
 	chans map[primitives.Slot]chan struct{}
+	roots map[primitives.Slot][32]byte
 }
 
 func newPayloadAvailability() *payloadAvailability {
-	return &payloadAvailability{chans: make(map[primitives.Slot]chan struct{})}
+	return &payloadAvailability{
+		chans: make(map[primitives.Slot]chan struct{}),
+		roots: make(map[primitives.Slot][32]byte),
+	}
 }
 
 // waiter returns a channel closed once the payload for slot is available.
@@ -30,11 +34,14 @@ func (p *payloadAvailability) waiter(slot primitives.Slot) <-chan struct{} {
 	return ch
 }
 
-// notify releases waiters for slot and prunes older slots. A closed channel is
-// stored so a waiter that registers after the event still observes availability.
-func (p *payloadAvailability) notify(slot primitives.Slot) {
+// notify releases waiters for slot, records the announced payload block root
+// (for freshness matching) when one is provided, and prunes older slots.
+func (p *payloadAvailability) notify(slot primitives.Slot, root *[32]byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if root != nil {
+		p.roots[slot] = *root
+	}
 	ch, ok := p.chans[slot]
 	if !ok {
 		ch = make(chan struct{})
@@ -45,9 +52,25 @@ func (p *payloadAvailability) notify(slot primitives.Slot) {
 	default:
 		close(ch)
 	}
+
 	for s := range p.chans {
 		if s < slot {
 			delete(p.chans, s)
 		}
 	}
+
+	for s := range p.roots {
+		if s < slot {
+			delete(p.roots, s)
+		}
+	}
+}
+
+// payloadRoot returns the payload block root announced for slot, if any.
+func (p *payloadAvailability) payloadRoot(slot primitives.Slot) ([32]byte, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	r, ok := p.roots[slot]
+	return r, ok
 }
