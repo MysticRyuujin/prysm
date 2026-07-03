@@ -61,21 +61,17 @@ func freshnessOptions(ctx context.Context, extractor headExtractor) []rest.GetOp
 		return opts
 	}
 
+	deadline := hint.Deadline
+	if floor := time.Now().Add(readFreshnessBudget); deadline.Before(floor) {
+		deadline = floor
+	}
+
+	opts = append(opts, rest.WithDeadline(deadline))
 	if extractor.poll {
-		deadline := hint.Deadline
-		if floor := time.Now().Add(readFreshnessBudget); deadline.Before(floor) {
-			deadline = floor
-		}
-
-		return append(opts, rest.WithDeadline(deadline), rest.WithRepoll())
+		opts = append(opts, rest.WithRepoll())
 	}
 
-	deadline := time.Now().Add(readFreshnessBudget)
-	if hint.Deadline.Before(deadline) {
-		deadline = hint.Deadline
-	}
-
-	return append(opts, rest.WithDeadline(deadline))
+	return opts
 }
 
 func blockFreshnessOptions(ctx context.Context, decode func([]byte, http.Header) (*ethpb.GenericBeaconBlock, error)) []rest.GetOption {

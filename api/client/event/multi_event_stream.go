@@ -70,9 +70,8 @@ func (m *MultiEventStream) Subscribe(out chan<- *Event) {
 
 	deduper := newDeduper(dedupCapacity)
 
-	// If no real event reaches out for outageSilence while stream
-	// errors are occurring, every host is effectively down.
 	errSinceEvent := false
+	feedWasAlive := false
 	watchdog := time.NewTimer(outageSilence)
 	defer watchdog.Stop()
 
@@ -100,6 +99,7 @@ func (m *MultiEventStream) Subscribe(out chan<- *Event) {
 			// A real event reached the validator: the feed is alive
 			// Re-arm the watchdog.
 			errSinceEvent = false
+			feedWasAlive = true
 			if !watchdog.Stop() {
 				select {
 				case <-watchdog.C:
@@ -109,7 +109,7 @@ func (m *MultiEventStream) Subscribe(out chan<- *Event) {
 			watchdog.Reset(outageSilence)
 		case <-watchdog.C:
 			watchdog.Reset(outageSilence)
-			if !errSinceEvent {
+			if !errSinceEvent && !feedWasAlive {
 				continue
 			}
 

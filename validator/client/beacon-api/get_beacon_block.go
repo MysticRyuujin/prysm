@@ -34,8 +34,18 @@ func (c *beaconApiValidatorClient) beaconBlock(ctx context.Context, slot primiti
 	}
 
 	queryUrl := apiutil.BuildURL(fmt.Sprintf("/eth/v3/validator/blocks/%d", slot), queryParams)
+
+	var (
+		decodedData  []byte
+		decodedBlock *ethpb.GenericBeaconBlock
+	)
+
 	decode := func(data []byte, header http.Header) (*ethpb.GenericBeaconBlock, error) {
-		return decodeBlockV3Response(data, header, queryUrl)
+		block, err := decodeBlockV3Response(data, header, queryUrl)
+		if err == nil {
+			decodedData, decodedBlock = data, block
+		}
+		return block, nil
 	}
 
 	opts := blockFreshnessOptions(ctx, decode)
@@ -44,15 +54,36 @@ func (c *beaconApiValidatorClient) beaconBlock(ctx context.Context, slot primiti
 		return nil, fmt.Errorf("get ssz: %w", err)
 	}
 
-	return decode(data, header)
+	if decodedBlock != nil && bytes.Equal(data, decodedData) {
+		return decodedBlock, nil
+	}
+
+	block, err := decodeBlockV3Response(data, header, queryUrl)
+	if err != nil {
+		return nil, fmt.Errorf("decode block v3 response: %w", err)
+	}
+
+	return block, nil
 }
 
 func (c *beaconApiValidatorClient) beaconBlockV4(ctx context.Context, slot primitives.Slot, queryParams neturl.Values) (*ethpb.GenericBeaconBlock, error) {
 	queryParams.Set("include_payload", strconv.FormatBool(c.stateless))
 	queryUrl := apiutil.BuildURL(fmt.Sprintf("/eth/v4/validator/blocks/%d", slot), queryParams)
 
+	// The freshness race decodes each candidate to inspect its parent root.
+	// Memoize the last successful decode so the winning body -- the one GetSSZ
+	// returns, potentially a multi-MB payload-included block -- is not
+	// unmarshalled a second time below.
+	var (
+		decodedData     []byte
+		decodedBlock    *ethpb.GenericBeaconBlock
+		decodedContents *ethpb.BeaconBlockContentsGloas
+	)
 	decode := func(data []byte, header http.Header) (*ethpb.GenericBeaconBlock, error) {
-		block, _, err := decodeBlockV4Response(data, header, queryUrl)
+		block, contents, err := decodeBlockV4Response(data, header, queryUrl)
+		if err == nil {
+			decodedData, decodedBlock, decodedContents = data, block, contents
+		}
 		return block, err
 	}
 
@@ -62,9 +93,12 @@ func (c *beaconApiValidatorClient) beaconBlockV4(ctx context.Context, slot primi
 		return nil, errors.Wrap(err, "could not get v4 beacon block")
 	}
 
-	block, contents, err := decodeBlockV4Response(data, header, queryUrl)
-	if err != nil {
-		return nil, err
+	block, contents := decodedBlock, decodedContents
+	if block == nil || !bytes.Equal(data, decodedData) {
+		block, contents, err = decodeBlockV4Response(data, header, queryUrl)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Cache the envelope only for the winning response.

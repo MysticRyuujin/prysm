@@ -113,8 +113,8 @@ func (c *handler) getRaw(ctx context.Context, endpoint string) (json.RawMessage,
 	}
 
 	defer func() {
-		if err := httpResp.Body.Close(); err != nil {
-			return
+		if closeErr := httpResp.Body.Close(); closeErr != nil {
+			log.WithError(closeErr).Error("Failed to close response body")
 		}
 	}()
 
